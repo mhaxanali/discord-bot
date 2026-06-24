@@ -218,5 +218,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project Specifics
-resources/truths.json
-resources/dares.json
+bot/resources/truths.json
+bot/resources/dares.json
