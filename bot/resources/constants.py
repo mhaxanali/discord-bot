@@ -13,3 +13,5 @@ with open("config.json", "r") as f:
     data = json.load(f)
 
 DB_PATH = data["db_path"]
+TOD_TRUTHS = data["tod_truths"]
+TOD_DARES = data["tod_dares"]
