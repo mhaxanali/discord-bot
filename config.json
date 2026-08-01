@@ -1,5 +1,7 @@
 {
     "db_path": "bot/resources/data/metadata.db",
     "tod_truths": "bot/resources/data/truths.json",
-    "tod_dares": "bot/resources/data/dares.json"
+    "tod_dares": "bot/resources/data/dares.json",
+
+    "global_prefix": "+"
 }
