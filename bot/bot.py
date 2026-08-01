@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 
 from bot.resources.constants import BOT_TOKEN, PREFIX
+from bot.logger import Logger
 
 BASE_DIR = Path(__file__).resolve().parent
 COGS_DIR = BASE_DIR / "cogs"
@@ -12,6 +13,8 @@ COGS_DIR = BASE_DIR / "cogs"
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+
+log = Logger()
 
 class Bot(commands.Bot):
     def __init__(self):
@@ -30,13 +33,12 @@ class Bot(commands.Bot):
                 ext_name = f"bot.cogs.{file.stem}"
                 try:
                     await self.load_extension(ext_name)
-                    print(f"[COG] Loaded: {file.name}")
+                    log.cog_load(ext_name)
                 except Exception as e:
-                    print(f"[COG] Failed: {file.name} -> {e}")
+                    log.cog_load(ext_name, False, f"Failed to Load Cog: {e}")
 
     async def on_ready(self):
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
-        print("Bot is online.")
+        log.bot_start(str(self.user), len(self.guilds))
 
 bot = Bot()
 
