@@ -1,4 +1,5 @@
 from dotenv import load_dotenv
+from pathlib import Path
 import os
 import json
 
@@ -12,7 +13,8 @@ if not BOT_TOKEN:
 with open("config.json", "r") as f:
     data = json.load(f)
 
-DB_PATH = data["db_path"]
-TOD_TRUTHS = data["tod_truths"]
-TOD_DARES = data["tod_dares"]
-PREFIX = data["global_prefix"]
+DB_PATH = Path(data["db_path"])
+SCHEMA_PATH = Path(data["schema_path"])
+TOD_TRUTHS = Path(data["tod_truths"])
+TOD_DARES = Path(data["tod_dares"])
+PREFIX = Path(data["global_prefix"])
