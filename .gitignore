@@ -219,3 +219,7 @@ __marimo__/
 
 # SQLite DB
 *.db
+
+# Truths/Dares Files
+truths.json
+dares.json
