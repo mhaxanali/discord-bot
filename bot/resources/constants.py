@@ -17,4 +17,4 @@ DB_PATH = Path(data["db_path"])
 SCHEMA_PATH = Path(data["schema_path"])
 TOD_TRUTHS = Path(data["tod_truths"])
 TOD_DARES = Path(data["tod_dares"])
-PREFIX = Path(data["global_prefix"])
+PREFIX = data["global_prefix"]
