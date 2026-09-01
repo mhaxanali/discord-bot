@@ -1,3 +1,4 @@
+# default events cog, always enabled
 from discord.ext import commands
 from bot.logger import Logger
 
