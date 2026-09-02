@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS guild_config (
     guild_id INTEGER PRIMARY KEY,
-    enabled_cogs TEXT DEFAULT '[]'
+    enabled_cogs TEXT DEFAULT '[]',
+    tod_channel INTEGER,
+    tod_role INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
