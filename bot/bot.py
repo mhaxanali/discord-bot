@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 
 from bot.resources.constants import BOT_TOKEN, PREFIX
+from bot.database.connector import Connector
 from bot.logger import Logger
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -23,8 +24,13 @@ class Bot(commands.Bot):
             intents=intents,
             help_command=None
         )
+        self.connector = Connector()
+        self._synced_guilds = False
 
     async def setup_hook(self):
+        await self.connector.connect()
+        log.cog_load("database connector")
+
         if COGS_DIR.exists():
             for file in COGS_DIR.glob("*.py"):
                 if file.name == "__init__.py":
@@ -38,7 +44,14 @@ class Bot(commands.Bot):
                     log.cog_load(ext_name, False, f"Failed to Load Cog: {e}")
 
     async def on_ready(self):
+        if not self._synced_guilds:
+            await self.connector.sync_guild_configs([g.id for g in self.guilds])
+            self._synced_guilds = True
         log.bot_start(str(self.user), len(self.guilds))
+
+    async def close(self):
+        await self.connector.close()
+        await super().close()
 
 bot = Bot()
 
