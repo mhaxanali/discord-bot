@@ -2,7 +2,9 @@ CREATE TABLE IF NOT EXISTS guild_config (
     guild_id INTEGER PRIMARY KEY,
     enabled_cogs TEXT DEFAULT '[]',
     tod_channel INTEGER,
-    tod_role INTEGER
+    tod_role INTEGER,
+    enable_mod_logs BOOLEAN NOT NULL DEFAULT 0,
+    mod_logs_channel INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
