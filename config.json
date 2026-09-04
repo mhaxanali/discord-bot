@@ -8,7 +8,7 @@
     "cogs": {
         "events":     { "is_default": true,  "required_permissions": [] },
         "config":     { "is_default": true,  "required_permissions": [] },
-        "tod":        { "is_default": false, "required_permissions": ["manage_messages"] },
+        "tod":        { "is_default": false, "required_permissions": ["manage_messages", "add_reactions"] },
         "blacklist":  { "is_default": false, "required_permissions": ["manage_messages"] },
         "moderation": { "is_default": false, "required_permissions": ["kick_members", "ban_members", "moderate_members"] }
     }
