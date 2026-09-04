@@ -3,6 +3,13 @@
     "schema_path": "bot/database/schema.sql",
     "tod_truths": "bot/resources/data/truths.json",
     "tod_dares": "bot/resources/data/dares.json",
+    "global_prefix": "+",
 
-    "global_prefix": "+"
+    "cogs": {
+        "events":     { "is_default": true,  "required_permissions": [] },
+        "config":     { "is_default": true,  "required_permissions": [] },
+        "tod":        { "is_default": false, "required_permissions": ["manage_messages"] },
+        "blacklist":  { "is_default": false, "required_permissions": ["manage_messages"] },
+        "moderation": { "is_default": false, "required_permissions": ["kick_members", "ban_members", "moderate_members"] }
+    }
 }

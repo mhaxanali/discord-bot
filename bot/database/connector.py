@@ -22,7 +22,8 @@ class Connector:
 
         # {guild_id: {"enabled_cogs": list[str], "tod_channel": int | None,
         #             "tod_role": int | None, "enable_mod_logs": bool,
-        #             "mod_logs_channel": int | None}}
+        #             "mod_logs_channel": int | None, "is_locked": bool,
+        #             "is_hard_locked": bool}}
         self._guild_config_cache: dict[int, dict] = {}
 
         # {guild_id: {user_id: {"is_global": bool, "channels": set[int]}}}
@@ -69,13 +70,15 @@ class Connector:
             "tod_role": None,
             "enable_mod_logs": False,
             "mod_logs_channel": None,
+            "is_locked": False,
+            "is_hard_locked": False,
         }
 
     async def _load_guild_config_cache(self):
         self._guild_config_cache.clear()
         async with self.db.execute(
             """SELECT guild_id, enabled_cogs, tod_channel, tod_role,
-                      enable_mod_logs, mod_logs_channel
+                      enable_mod_logs, mod_logs_channel, is_locked, is_hard_locked
                FROM guild_config"""
         ) as cursor:
             async for row in cursor:
@@ -85,14 +88,17 @@ class Connector:
                     "tod_role": row["tod_role"],
                     "enable_mod_logs": bool(row["enable_mod_logs"]),
                     "mod_logs_channel": row["mod_logs_channel"],
+                    "is_locked": bool(row["is_locked"]),
+                    "is_hard_locked": bool(row["is_hard_locked"]),
                 }
 
     async def create_guild_config(self, guild_id: int):
         """Ensure a guild has a config row. Safe to call repeatedly (no-op if it exists)."""
         await self.db.execute(
             """INSERT INTO guild_config
-                   (guild_id, enabled_cogs, tod_channel, tod_role, enable_mod_logs, mod_logs_channel)
-               VALUES (?, '[]', NULL, NULL, 0, NULL)
+                   (guild_id, enabled_cogs, tod_channel, tod_role,
+                    enable_mod_logs, mod_logs_channel, is_locked, is_hard_locked)
+               VALUES (?, '[]', NULL, NULL, 0, NULL, 0, 0)
                ON CONFLICT(guild_id) DO NOTHING""",
             (guild_id,)
         )
@@ -148,6 +154,22 @@ class Connector:
         )
         await self.db.commit()
         self._guild_config_cache.setdefault(guild_id, self._default_guild_config())["mod_logs_channel"] = channel_id
+
+    async def set_locked(self, guild_id: int, locked: bool):
+        await self.db.execute(
+            "UPDATE guild_config SET is_locked = ? WHERE guild_id = ?",
+            (int(locked), guild_id)
+        )
+        await self.db.commit()
+        self._guild_config_cache.setdefault(guild_id, self._default_guild_config())["is_locked"] = locked
+
+    async def set_hard_locked(self, guild_id: int, hard_locked: bool):
+        await self.db.execute(
+            "UPDATE guild_config SET is_hard_locked = ? WHERE guild_id = ?",
+            (int(hard_locked), guild_id)
+        )
+        await self.db.commit()
+        self._guild_config_cache.setdefault(guild_id, self._default_guild_config())["is_hard_locked"] = hard_locked
 
     def is_cog_enabled(self, guild_id: int, cog_name: str) -> bool:
         return cog_name in self.get_guild_config(guild_id)["enabled_cogs"]
