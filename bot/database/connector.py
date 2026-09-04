@@ -1,5 +1,7 @@
+import re
 import json
 import random
+import sqlite3
 import aiosqlite
 from pathlib import Path
 
@@ -20,19 +22,14 @@ class Connector:
         self.dares_path = dares_path
         self.db: aiosqlite.Connection | None = None
 
-        # {guild_id: {"enabled_cogs": list[str], "tod_channel": int | None,
-        #             "tod_role": int | None, "enable_mod_logs": bool,
-        #             "mod_logs_channel": int | None, "is_locked": bool,
-        #             "is_hard_locked": bool}}
         self._guild_config_cache: dict[int, dict] = {}
-
-        # {guild_id: {user_id: {"is_global": bool, "channels": set[int]}}}
         self._blacklist_cache: dict[int, dict] = {}
 
-        # {guild_id_or_None: {"truth": [{"id", "content", "is_banned"}, ...],
-        #                      "dare":  [...]}}
-        # guild_id = None holds the default/global pool seeded from JSON
+        # {guild_id_or_None: {"truth": [{"id", "content"}, ...], "dare": [...]}}
         self._prompts_cache: dict[int | None, dict[str, list[dict]]] = {}
+
+        # {guild_id: {prompt_id, prompt_id, ...}}
+        self._prompt_bans_cache: dict[int, set[int]] = {}
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -45,15 +42,49 @@ class Connector:
         await self.db.execute("PRAGMA journal_mode=WAL")
         await self.db.execute("PRAGMA foreign_keys=ON")
         await self._init_schema()
+        await self._run_migrations()
         await self._load_guild_config_cache()
         await self._load_blacklist_cache()
         await self._sync_prompts_from_json()
         await self._load_prompts_cache()
+        await self._load_prompt_bans_cache()
 
     async def _init_schema(self):
         schema_sql = self.schema_path.read_text()
         await self.db.executescript(schema_sql)
         await self.db.commit()
+
+    async def _run_migrations(self):
+        await self.db.execute(
+            """CREATE TABLE IF NOT EXISTS _schema_migrations (
+                   filename TEXT PRIMARY KEY,
+                   applied_at TEXT DEFAULT (datetime('now'))
+               )"""
+        )
+        await self.db.commit()
+
+        migrations_dir = self.schema_path.parent / "migrations"
+        if not migrations_dir.exists():
+            return
+
+        async with self.db.execute("SELECT filename FROM _schema_migrations") as cursor:
+            applied = {row["filename"] async for row in cursor}
+
+        for path in sorted(migrations_dir.glob("*.sql")):
+            if path.name in applied:
+                continue
+
+            try:
+                await self.db.executescript(path.read_text())
+            except sqlite3.OperationalError:
+                # Target state already satisfied (e.g. fresh DB via schema.sql) — safe to skip.
+                pass
+
+            await self.db.execute(
+                "INSERT OR IGNORE INTO _schema_migrations (filename) VALUES (?)",
+                (path.name,)
+            )
+            await self.db.commit()
 
     async def close(self):
         if self.db:
@@ -93,7 +124,6 @@ class Connector:
                 }
 
     async def create_guild_config(self, guild_id: int):
-        """Ensure a guild has a config row. Safe to call repeatedly (no-op if it exists)."""
         await self.db.execute(
             """INSERT INTO guild_config
                    (guild_id, enabled_cogs, tod_channel, tod_role,
@@ -108,7 +138,6 @@ class Connector:
             self._guild_config_cache[guild_id] = self._default_guild_config()
 
     async def sync_guild_configs(self, guild_ids: list[int]):
-        """Ensure every currently-joined guild has a config row. Call once on startup."""
         for guild_id in guild_ids:
             await self.create_guild_config(guild_id)
 
@@ -267,28 +296,42 @@ class Connector:
     # prompts
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_prompt(content: str, prompt_type: str) -> str:
+        """Collapses whitespace, capitalizes the first letter, and ensures
+        proper terminal punctuation (? for truths, . for dares) unless the
+        content already ends in ./!/?."""
+        content = re.sub(r"\s+", " ", content.strip())
+        if content:
+            content = content[0].upper() + content[1:]
+        if content and content[-1] not in ".!?":
+            content += "?" if prompt_type == "truth" else "."
+        return content
+
     async def _sync_prompts_from_json(self):
         """
-        On every startup: read truths.json/dares.json, and insert any content
-        not already present in the default pool (guild_id IS NULL). Existing
-        DB entries (including bans) are never touched or removed here.
+        On every startup: read truths.json/dares.json (normalized), and insert
+        any content not already present in the default pool (guild_id IS NULL).
+        Existing DB entries are never touched or removed here.
         """
-        truths = json.loads(self.truths_path.read_text())
-        dares = json.loads(self.dares_path.read_text())
+        raw_truths = json.loads(self.truths_path.read_text())
+        raw_dares = json.loads(self.dares_path.read_text())
 
-        for content_list, ptype in [(truths, "truth"), (dares, "dare")]:
+        for content_list, ptype in [(raw_truths, "truth"), (raw_dares, "dare")]:
+            normalized = [self._normalize_prompt(c, ptype) for c in content_list]
+
             async with self.db.execute(
                 "SELECT content FROM prompts WHERE guild_id IS NULL AND type = ?",
                 (ptype,)
             ) as cursor:
                 existing = {row["content"] async for row in cursor}
 
-            new_entries = [c for c in content_list if c not in existing]
+            new_entries = [c for c in normalized if c not in existing]
 
             if new_entries:
                 await self.db.executemany(
-                    """INSERT INTO prompts (guild_id, type, content, added_by, is_banned)
-                       VALUES (NULL, ?, ?, NULL, 0)""",
+                    """INSERT INTO prompts (guild_id, type, content, added_by)
+                       VALUES (NULL, ?, ?, NULL)""",
                     [(ptype, content) for content in new_entries]
                 )
                 await self.db.commit()
@@ -296,34 +339,37 @@ class Connector:
     async def _load_prompts_cache(self):
         self._prompts_cache.clear()
         async with self.db.execute(
-            "SELECT id, guild_id, type, content, is_banned FROM prompts"
+            "SELECT id, guild_id, type, content FROM prompts"
         ) as cursor:
             async for row in cursor:
                 bucket = self._prompts_cache.setdefault(row["guild_id"], {"truth": [], "dare": []})
-                bucket[row["type"]].append({
-                    "id": row["id"],
-                    "content": row["content"],
-                    "is_banned": bool(row["is_banned"]),
-                })
+                bucket[row["type"]].append({"id": row["id"], "content": row["content"]})
 
-    def get_prompt(self, guild_id: int, prompt_type: str, exclude: set[str] | None = None) -> str | None:
-        """
-        Random non-banned prompt from the default pool + this guild's customs.
-        `exclude` lets a game avoid repeats (e.g. last_prompts). If everything
-        available is excluded, falls back to ignoring the exclude set rather
-        than returning None.
-        """
-        exclude = exclude or set()
+    async def _load_prompt_bans_cache(self):
+        self._prompt_bans_cache.clear()
+        async with self.db.execute("SELECT guild_id, prompt_id FROM prompt_bans") as cursor:
+            async for row in cursor:
+                self._prompt_bans_cache.setdefault(row["guild_id"], set()).add(row["prompt_id"])
 
-        def pool(skip_exclude: bool = False) -> list[str]:
+    def get_prompt(self, guild_id: int, prompt_type: str, exclude_ids: set[int] | None = None) -> dict | None:
+        """
+        Random non-banned (for this guild) prompt from the default pool + this
+        guild's customs. `exclude_ids` lets a game avoid repeats. If everything
+        available is excluded, falls back to ignoring the exclude set.
+        Returns {"id": int, "content": str} or None if nothing is available.
+        """
+        exclude_ids = exclude_ids or set()
+        banned = self._prompt_bans_cache.get(guild_id, set())
+
+        def pool(skip_exclude: bool = False) -> list[dict]:
             result = []
             for gid in (None, guild_id):
                 for p in self._prompts_cache.get(gid, {}).get(prompt_type, []):
-                    if p["is_banned"]:
+                    if p["id"] in banned:
                         continue
-                    if not skip_exclude and p["content"] in exclude:
+                    if not skip_exclude and p["id"] in exclude_ids:
                         continue
-                    result.append(p["content"])
+                    result.append(p)
             return result
 
         candidates = pool()
@@ -339,52 +385,69 @@ class Connector:
         content: str,
         added_by: int | None = None,
     ) -> int:
+        content = self._normalize_prompt(content, prompt_type)
+
         cursor = await self.db.execute(
-            """INSERT INTO prompts (guild_id, type, content, added_by, is_banned)
-               VALUES (?, ?, ?, ?, 0)""",
+            """INSERT INTO prompts (guild_id, type, content, added_by)
+               VALUES (?, ?, ?, ?)""",
             (guild_id, prompt_type, content, added_by)
         )
         await self.db.commit()
         prompt_id = cursor.lastrowid
 
         bucket = self._prompts_cache.setdefault(guild_id, {"truth": [], "dare": []})
-        bucket[prompt_type].append({"id": prompt_id, "content": content, "is_banned": False})
+        bucket[prompt_type].append({"id": prompt_id, "content": content})
         return prompt_id
 
-    def _locate_prompt(self, prompt_id: int) -> dict | None:
-        for types in self._prompts_cache.values():
-            for plist in types.values():
+    def get_prompt_by_id(self, prompt_id: int) -> dict | None:
+        """Returns {"id", "content", "guild_id", "type"} or None if not found."""
+        for gid, types in self._prompts_cache.items():
+            for ptype, plist in types.items():
                 for p in plist:
                     if p["id"] == prompt_id:
-                        return p
+                        return {"id": p["id"], "content": p["content"], "guild_id": gid, "type": ptype}
         return None
 
-    async def ban_prompt(self, prompt_id: int):
-        await self.db.execute("UPDATE prompts SET is_banned = 1 WHERE id = ?", (prompt_id,))
-        await self.db.commit()
-        entry = self._locate_prompt(prompt_id)
-        if entry:
-            entry["is_banned"] = True
+    def is_prompt_visible_to_guild(self, guild_id: int, prompt_id: int) -> bool:
+        prompt = self.get_prompt_by_id(prompt_id)
+        if prompt is None:
+            return False
+        return prompt["guild_id"] is None or prompt["guild_id"] == guild_id
 
-    async def unban_prompt(self, prompt_id: int):
-        await self.db.execute("UPDATE prompts SET is_banned = 0 WHERE id = ?", (prompt_id,))
+    def is_prompt_banned(self, guild_id: int, prompt_id: int) -> bool:
+        return prompt_id in self._prompt_bans_cache.get(guild_id, set())
+
+    async def ban_prompt(self, guild_id: int, prompt_id: int, banned_by: int | None = None):
+        await self.db.execute(
+            """INSERT INTO prompt_bans (guild_id, prompt_id, banned_by)
+               VALUES (?, ?, ?)
+               ON CONFLICT(guild_id, prompt_id) DO NOTHING""",
+            (guild_id, prompt_id, banned_by)
+        )
         await self.db.commit()
-        entry = self._locate_prompt(prompt_id)
-        if entry:
-            entry["is_banned"] = False
+        self._prompt_bans_cache.setdefault(guild_id, set()).add(prompt_id)
+
+    async def unban_prompt(self, guild_id: int, prompt_id: int):
+        await self.db.execute(
+            "DELETE FROM prompt_bans WHERE guild_id = ? AND prompt_id = ?",
+            (guild_id, prompt_id)
+        )
+        await self.db.commit()
+        self._prompt_bans_cache.get(guild_id, set()).discard(prompt_id)
 
     async def delete_prompt(self, prompt_id: int):
         await self.db.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
         await self.db.commit()
+
         for types in self._prompts_cache.values():
             for ptype, plist in types.items():
                 types[ptype] = [p for p in plist if p["id"] != prompt_id]
 
-    def list_prompts(self, guild_id: int, prompt_type: str, include_banned: bool = False) -> list[dict]:
-        combined = (
-            self._prompts_cache.get(None, {}).get(prompt_type, [])
-            + self._prompts_cache.get(guild_id, {}).get(prompt_type, [])
-        )
-        if not include_banned:
-            combined = [p for p in combined if not p["is_banned"]]
-        return combined
+        for banned_set in self._prompt_bans_cache.values():
+            banned_set.discard(prompt_id)
+
+    def list_default_prompts(self, prompt_type: str) -> list[dict]:
+        return list(self._prompts_cache.get(None, {}).get(prompt_type, []))
+
+    def list_guild_prompts(self, guild_id: int, prompt_type: str) -> list[dict]:
+        return list(self._prompts_cache.get(guild_id, {}).get(prompt_type, []))
