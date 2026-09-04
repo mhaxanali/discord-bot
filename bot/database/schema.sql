@@ -15,19 +15,29 @@ CREATE TABLE IF NOT EXISTS prompts (
     type TEXT NOT NULL CHECK (type IN ('truth', 'dare')),
     content TEXT NOT NULL,
     added_by INTEGER,
-    is_banned BOOLEAN NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_prompts_guild_type
-    ON prompts (guild_id, type, is_banned);
+    ON prompts (guild_id, type);
+
+CREATE TABLE IF NOT EXISTS prompt_bans (
+    guild_id INTEGER NOT NULL,
+    prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+    banned_by INTEGER,
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (guild_id, prompt_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_bans_guild
+    ON prompt_bans (guild_id);
 
 CREATE TABLE IF NOT EXISTS blacklist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     is_global BOOLEAN NOT NULL DEFAULT 0,
-    channels TEXT DEFAULT '[]',   -- JSON array of channel_ids, only used when is_global = 0
+    channels TEXT DEFAULT '[]',
     reason TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE (guild_id, user_id)
