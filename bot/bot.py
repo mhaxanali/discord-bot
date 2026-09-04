@@ -4,7 +4,7 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from bot.resources.constants import BOT_TOKEN, PREFIX
+from bot.resources.constants import BOT_TOKEN, PREFIX, DEFAULT_COGS
 from bot.database.connector import Connector
 from bot.logger import Logger
 
@@ -16,6 +16,37 @@ intents.message_content = True
 intents.members = True
 
 log = Logger()
+
+
+async def enabled_cogs_check(ctx: commands.Context) -> bool:
+    """Global check: blocks commands belonging to a cog that isn't enabled for this guild."""
+    if ctx.guild is None:
+        return False
+
+    if ctx.cog is None:
+        return True
+
+    cog_name = ctx.cog.qualified_name.lower()
+
+    if cog_name in DEFAULT_COGS:
+        return True
+
+    cfg = ctx.bot.connector.get_guild_config(ctx.guild.id)
+    if cog_name not in cfg["enabled_cogs"]:
+        await ctx.send(
+            embed=discord.Embed(
+                title="Cog Disabled",
+                description=(
+                    f"`{cog_name}` is not enabled in this server. "
+                    f"Ask an admin to run `+config cogs enable {cog_name}`."
+                ),
+                colour=discord.Colour.red()
+            )
+        )
+        return False
+
+    return True
+
 
 class Bot(commands.Bot):
     def __init__(self):
@@ -30,6 +61,8 @@ class Bot(commands.Bot):
     async def setup_hook(self):
         await self.connector.connect()
         log.cog_load("database connector")
+
+        self.add_check(enabled_cogs_check)
 
         if COGS_DIR.exists():
             for file in COGS_DIR.glob("*.py"):
