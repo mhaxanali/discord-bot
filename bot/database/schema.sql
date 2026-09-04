@@ -4,7 +4,9 @@ CREATE TABLE IF NOT EXISTS guild_config (
     tod_channel INTEGER,
     tod_role INTEGER,
     enable_mod_logs BOOLEAN NOT NULL DEFAULT 0,
-    mod_logs_channel INTEGER
+    mod_logs_channel INTEGER,
+    is_locked BOOLEAN NOT NULL DEFAULT 0,
+    is_hard_locked BOOLEAN NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS prompts (
